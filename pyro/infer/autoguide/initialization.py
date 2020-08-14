@@ -1,6 +1,7 @@
 # Copyright (c) 2017-2019 Uber Technologies, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+# TODO: move this file out of `autoguide` in a minor release
 r"""
 The pyro.infer.autoguide.initialization module contains initialization functions for
 automatic guides.
@@ -20,7 +21,6 @@ from pyro.infer.util import is_validation_enabled
 from pyro.poutine.messenger import Messenger
 from pyro.util import torch_isnan
 
-# TODO: move this file out of `autoguide` in a minor release
 
 def _is_multivariate(d):
     while isinstance(d, (Independent, MaskedDistribution)):
