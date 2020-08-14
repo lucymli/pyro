@@ -20,10 +20,11 @@ import time
 from os.path import exists
 
 import numpy as np
+import polyphonic_data_loader as poly
 import torch
 import torch.nn as nn
+from util import get_logger
 
-import polyphonic_data_loader as poly
 import pyro
 import pyro.distributions as dist
 import pyro.poutine as poutine
@@ -31,7 +32,6 @@ from pyro.distributions import TransformedDistribution
 from pyro.distributions.transforms import affine_autoregressive
 from pyro.infer import SVI, JitTrace_ELBO, Trace_ELBO, TraceEnum_ELBO, TraceTMC_ELBO, config_enumerate
 from pyro.optim import ClippedAdam
-from util import get_logger
 
 
 class Emitter(nn.Module):

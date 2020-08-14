@@ -3,13 +3,10 @@
 
 import pyroapi
 
-from pyro.primitives import (  # noqa: F401
-    clear_param_store, deterministic, factor, get_param_store, module, param, plate, random_module, sample, subsample,
-)
-
-from pyro.contrib.funsor.handlers.primitives import to_data, to_funsor  # noqa: F401
 from pyro.contrib.funsor.handlers import condition, do, markov  # noqa: F401
-
+from pyro.contrib.funsor.handlers.primitives import to_data, to_funsor  # noqa: F401
+from pyro.primitives import (clear_param_store, deterministic, factor, get_param_store, module, param,  # noqa: F401
+                             plate, random_module, sample, subsample)
 
 pyroapi.register_backend('contrib.funsor', {
     'distributions': 'pyro.distributions',

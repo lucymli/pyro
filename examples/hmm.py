@@ -39,16 +39,16 @@ import argparse
 import logging
 import sys
 
+import dmm.polyphonic_data_loader as poly
 import torch
 import torch.nn as nn
 from torch.distributions import constraints
 
-import dmm.polyphonic_data_loader as poly
 import pyro
 import pyro.distributions as dist
 from pyro import poutine
-from pyro.infer.autoguide import AutoDelta
 from pyro.infer import SVI, JitTraceEnum_ELBO, TraceEnum_ELBO, TraceTMC_ELBO
+from pyro.infer.autoguide import AutoDelta
 from pyro.ops.indexing import Vindex
 from pyro.optim import Adam
 from pyro.util import ignore_jit_warnings
