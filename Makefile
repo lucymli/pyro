@@ -32,7 +32,7 @@ doctest: FORCE
 	python -m pytest -p tests.doctest_fixtures --doctest-modules -o filterwarnings=ignore pyro
 
 format: FORCE
-	isort --recursive *.py pyro/ examples/ tests/ profiler/*.py docs/source/conf.py
+	isort *.py pyro/ examples/ tests/ profiler/*.py docs/source/conf.py
 
 perf-test: FORCE
 	bash scripts/perf_test.sh ${ref}
