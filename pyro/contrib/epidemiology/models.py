@@ -641,6 +641,140 @@ class SuperspreadingSEIRModel(CompartmentalModel):
         state["I"] = state["I"] + E2I - I2R
 
 
+class TimeVaryingSuperspreadingSEIRModel(CompartmentalModel):
+    r"""
+    Generalizes :class:`SimpleSEIRModel` by adding superspreading effects.
+
+    To customize this model we recommend forking and editing this class.
+
+    This model accounts for superspreading (overdispersed individual
+    reproductive number) by assuming each infected individual infects
+    BetaBinomial-many susceptible individuals, where the BetaBinomial
+    distribution acts as an overdispersed Binomial distribution, adapting the
+    more standard NegativeBinomial distribution that acts as an overdispersed
+    Poisson distribution [1,2] to the setting of finite populations. To
+    preserve Markov structure, we follow [2] and assume all infections by a
+    single individual occur on the single time step where that individual makes
+    an ``I -> R`` transition. That is, whereas the :class:`SimpleSEIRModel`
+    assumes infected individuals infect `Binomial(S,R/tau)`-many susceptible
+    individuals during each infected time step (over `tau`-many steps on
+    average), this model assumes they infect `BetaBinomial(k,...,S)`-many
+    susceptible individuals but only on the final time step before recovering.
+
+    This model also adds an optional likelihood for observed phylogenetic data
+    in the form of coalescent times. These are provided as a pair
+    ``(leaf_times, coal_times)`` of times at which genomes are sequenced and
+    lineages coalesce, respectively. We incorporate this data using the
+    :class:`~pyro.distributions.CoalescentRateLikelihood` with base coalescence
+    rate computed from the ``S`` and ``I`` populations. This likelihood is
+    independent across time and preserves the Markov propert needed for
+    inference.
+
+    **References**
+
+    [1] J. O. Lloyd-Smith, S. J. Schreiber, P. E. Kopp, W. M. Getz (2005)
+        "Superspreading and the effect of individual variation on disease
+        emergence"
+        https://www.nature.com/articles/nature04153.pdf
+    [2] Lucy M. Li, Nicholas C. Grassly, Christophe Fraser (2017)
+        "Quantifying Transmission Heterogeneity Using Both Pathogen Phylogenies
+        and Incidence Time Series"
+        https://academic.oup.com/mbe/article/34/11/2982/3952784
+
+    :param int population: Total ``population = S + E + I + R``.
+    :param float incubation_time: Mean incubation time (duration in state
+        ``E``). Must be greater than 1.
+    :param float recovery_time: Mean recovery time (duration in state
+        ``I``). Must be greater than 1.
+    :param iterable data: Time series of new observed infections. Each time
+        step is Binomial distributed between 0 and the number of ``S -> E``
+        transitions. This allows false negative but no false positives.
+    """
+
+    def __init__(self, population, incubation_time, recovery_time, data, *,
+                 leaf_times=None, coal_times=None):
+        compartments = ("S", "E", "I")  # R is implicit.
+        duration = len(data)
+        super().__init__(compartments, duration, population)
+
+        assert isinstance(incubation_time, float)
+        assert incubation_time > 1
+        self.incubation_time = incubation_time
+
+        assert isinstance(recovery_time, float)
+        assert recovery_time > 1
+        self.recovery_time = recovery_time
+
+        self.data = data
+
+        assert (leaf_times is None) == (coal_times is None)
+        if leaf_times is None:
+            self.coal_likelihood = None
+        else:
+            self.coal_likelihood = dist.CoalescentRateLikelihood(
+                leaf_times, coal_times, duration)
+
+    def global_model(self):
+        tau_e = self.incubation_time
+        tau_i = self.recovery_time
+        R0 = pyro.sample("R0", dist.LogNormal(0., 1.))
+        k = pyro.sample("k", dist.Exponential(1.))
+        rho = pyro.sample("rho", dist.Beta(10, 10))
+        prop_S = pyro.sample("prop_S", dist.Beta(10, 1))
+        prop_E = pyro.sample("prop_E", dist.Uniform(0, 1-prop_S))
+        prop_I = pyro.sample("prop_I", dist.Uniform(0, 1-prop_S-prop_E))
+        return R0, k, tau_e, tau_i, rho, prop_S, prop_E, prop_I
+
+    def initialize(self, params):
+        population_tensor = torch.tensor(self.population, dtype=torch.double)
+        R0, k, tau_e, tau_i, rho, prop_S, prop_E, prop_I = params
+        return {"S": torch.round(population_tensor*torch.tensor(prop_S, dtype=torch.double)),
+        "E": torch.round(population_tensor*torch.tensor(prop_E, dtype=torch.double)),
+        "I": torch.round(population_tensor*torch.tensor(prop_I, dtype=torch.double)),
+        "beta": torch.tensor(1.),
+        "gamma": torch.tensor(1.)}
+
+    def transition(self, params, state, t):
+        R0, k, tau_e, tau_i, rho, prop_S, prop_E, prop_I = params
+        beta = pyro.sample("beta_{}".format(t),
+                   dist.LogNormal(state["beta"].log(), 0.1))
+        gamma = pyro.sample("gamma_{}".format(t),
+           dist.LogNormal(state["gamma"].log(), 0.1))
+        Rt = pyro.deterministic("Rt_{}".format(t), R0 * beta)
+        rhot = pyro.deterministic("rhot_{}".format(t), rho * gamma)
+        # Sample flows between compartments.
+        E2I = pyro.sample("E2I_{}".format(t),
+                          binomial_dist(state["E"], 1 / tau_e))
+        I2R = pyro.sample("I2R_{}".format(t),
+                          binomial_dist(state["I"], 1 / tau_i))
+        S2E = pyro.sample("S2E_{}".format(t),
+                          infection_dist(individual_rate=Rt / tau_i,
+                                         num_susceptible=state["S"],
+                                         num_infectious=state["I"],
+                                         population=self.population,
+                                         concentration=k))
+
+        # Condition on observations.
+        t_is_observed = isinstance(t, slice) or t < self.duration
+        pyro.sample("obs_{}".format(t),
+                    binomial_dist(S2E, rhot),
+                    obs=self.data[t] if t_is_observed else None)
+        if self.coal_likelihood is not None:
+            R = Rt * state["S"] / self.population
+            coal_rate = R * (1. + 1. / k) / (tau_i * state["I"] + 1e-8)
+            pyro.factor("coalescent_{}".format(t),
+                        self.coal_likelihood(coal_rate, t)
+                        if t_is_observed else torch.tensor(0.))
+
+        # Update compartements with flows.
+        state["S"] = state["S"] - S2E
+        state["E"] = state["E"] + S2E - E2I
+        state["I"] = state["I"] + E2I - I2R
+        state["beta"] = beta
+        state["gamma"] = gamma
+
+
+
 class HeterogeneousSIRModel(CompartmentalModel):
     """
     Generalizes :class:`SimpleSIRModel` by allowing ``Rt`` and ``rho`` to vary
